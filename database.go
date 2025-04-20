@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -17,6 +20,7 @@ type Database struct {
 	client   *mongo.Client
 	users    *mongo.Collection
 	messages *mongo.Collection
+	chats    *mongo.Collection
 }
 
 // DBUser представляет структуру пользователя в базе данных
@@ -34,6 +38,35 @@ type DBMessage struct {
 	Content   string             `bson:"content"`
 	CreatedAt time.Time          `bson:"createdAt"`
 	Read      bool               `bson:"read"`
+	ChatID    string             `bson:"chatId"`
+}
+
+// DBChat представляет структуру чата в базе данных
+type DBChat struct {
+	ID          string     `bson:"_id"`
+	Users       []string   `bson:"users"`
+	CreatedAt   time.Time  `bson:"createdAt"`
+	LastMessage *DBMessage `bson:"lastMessage,omitempty"`
+}
+
+// Chat представляет структуру чата
+type Chat struct {
+	ID          string    `bson:"_id" json:"id"`
+	Users       []string  `bson:"users" json:"users"`
+	LastMessage *Message  `bson:"lastMessage,omitempty" json:"lastMessage,omitempty"`
+	CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
+}
+
+// Message представляет структуру сообщения
+type Message struct {
+	ID        string    `bson:"_id" json:"id,omitempty"`
+	Type      string    `json:"type,omitempty"`
+	ChatID    string    `bson:"chatId" json:"chatId,omitempty"`
+	From      string    `bson:"from" json:"from"`
+	To        string    `bson:"to" json:"to"`
+	Content   string    `bson:"content" json:"content"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt,omitempty"`
+	Read      bool      `bson:"read" json:"read,omitempty"`
 }
 
 func NewDatabase(url string) (*Database, error) {
@@ -56,11 +89,13 @@ func NewDatabase(url string) (*Database, error) {
 	db := client.Database("messenger")
 	users := db.Collection("users")
 	messages := db.Collection("messages")
+	chats := db.Collection("chats")
 
 	return &Database{
 		client:   client,
 		users:    users,
 		messages: messages,
+		chats:    chats,
 	}, nil
 }
 
@@ -125,10 +160,48 @@ func (db *Database) GetUser(username string) (*DBUser, error) {
 	return &user, nil
 }
 
-// SaveMessage сохраняет новое сообщение
+// GetOrCreateChat получает существующий чат или создает новый
+func (db *Database) GetOrCreateChat(user1, user2 string) (*DBChat, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Сортируем имена пользователей для создания уникального ID чата
+	users := []string{user1, user2}
+	sort.Strings(users)
+	chatID := base64.StdEncoding.EncodeToString([]byte(strings.Join(users, ":")))
+
+	// Пытаемся найти существующий чат
+	var chat DBChat
+	err := db.chats.FindOne(ctx, bson.M{"_id": chatID}).Decode(&chat)
+	if err == nil {
+		return &chat, nil
+	}
+
+	// Если чат не найден, создаем новый
+	chat = DBChat{
+		ID:        chatID,
+		Users:     users,
+		CreatedAt: time.Now(),
+	}
+
+	_, err = db.chats.InsertOne(ctx, chat)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания чата: %v", err)
+	}
+
+	return &chat, nil
+}
+
+// SaveMessage сохраняет новое сообщение и обновляет последнее сообщение в чате
 func (db *Database) SaveMessage(from, to, content string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Получаем или создаем чат
+	chat, err := db.GetOrCreateChat(from, to)
+	if err != nil {
+		return err
+	}
 
 	// Создаём новое сообщение
 	message := DBMessage{
@@ -137,9 +210,23 @@ func (db *Database) SaveMessage(from, to, content string) error {
 		Content:   content,
 		CreatedAt: time.Now(),
 		Read:      false,
+		ChatID:    chat.ID,
 	}
 
-	_, err := db.messages.InsertOne(ctx, message) //сохраняем сообщение с контекстом
+	// Сохраняем сообщение
+	result, err := db.messages.InsertOne(ctx, message)
+	if err != nil {
+		return err
+	}
+
+	// Обновляем последнее сообщение в чате
+	message.ID = result.InsertedID.(primitive.ObjectID)
+	_, err = db.chats.UpdateOne(
+		ctx,
+		bson.M{"_id": chat.ID},
+		bson.M{"$set": bson.M{"lastMessage": message}},
+	)
+
 	return err
 }
 
@@ -149,14 +236,14 @@ func (db *Database) GetMessages(from, to string, limit int64) ([]DBMessage, erro
 	defer cancel()
 
 	filter := bson.M{
-		"$or": []bson.M{ //or это или, то есть если пользователь отправил сообщение другому пользователю, то он будет встречаться в обоих направлениях
+		"$or": []bson.M{
 			{"from": from, "to": to},
 			{"from": to, "to": from},
 		},
 	}
 
-	opts := options.Find().SetSort(bson.D{{"createdAt", -1}}).SetLimit(limit) //сортируем с конца(по убыванию) и ограничиваем количество сообщений
-	cursor, err := db.messages.Find(ctx, filter, opts)                        //курсор перебирает все сообщения
+	opts := options.Find().SetSort(bson.D{{"createdAt", -1}}).SetLimit(limit)
+	cursor, err := db.messages.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -175,14 +262,14 @@ func (db *Database) MarkMessagesAsRead(from, to string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	filter := bson.M{ //фильтр, где идёт поиск сообщений от одного пользователя к другому и они не прочитаны
+	filter := bson.M{
 		"from": from,
 		"to":   to,
 		"read": false,
 	}
 
-	update := bson.M{ //обновляем сообщение, где идёт поиск сообщений от одного пользователя к другому и они не прочитаны
-		"$set": bson.M{ // $set это установить, то есть мы устанавливаем что прочитанное сообщение равно true
+	update := bson.M{
+		"$set": bson.M{
 			"read": true,
 		},
 	}
@@ -213,4 +300,155 @@ func (db *Database) GetUnreadMessages(username string) ([]DBMessage, error) {
 	}
 
 	return messages, nil
+}
+
+// GetMessagesWithPagination получает сообщения между двумя пользователями с пагинацией
+func (db *Database) GetMessagesWithPagination(from, to string, page, pageSize int64) ([]DBMessage, int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"from": from, "to": to},
+			{"from": to, "to": from},
+		},
+	}
+
+	total, err := db.messages.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{"createdAt", -1}}).
+		SetSkip((page - 1) * pageSize).
+		SetLimit(pageSize)
+
+	cursor, err := db.messages.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var messages []DBMessage
+	if err = cursor.All(ctx, &messages); err != nil {
+		return nil, 0, err
+	}
+
+	return messages, total, nil
+}
+
+// GetChatMessages получает сообщения из чата
+func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{"chatId": chatID}
+	opts := options.Find().SetSort(bson.D{{"createdAt", -1}}).SetLimit(limit)
+
+	cursor, err := db.messages.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var messages []DBMessage
+	if err = cursor.All(ctx, &messages); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+// GetUserChats получает все чаты пользователя
+func (db *Database) GetUserChats(username string) ([]DBChat, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{"users": username}
+	opts := options.Find().SetSort(bson.D{{"lastMessage.createdAt", -1}})
+
+	cursor, err := db.chats.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var chats []DBChat
+	if err = cursor.All(ctx, &chats); err != nil {
+		return nil, err
+	}
+
+	return chats, nil
+}
+
+// GetChat возвращает информацию о чате по его ID
+func (db *Database) GetChat(chatID string) (*Chat, error) {
+	chat := &Chat{}
+	err := db.chats.FindOne(context.Background(), bson.M{"_id": chatID}).Decode(chat)
+	if err != nil {
+		return nil, err
+	}
+	return chat, nil
+}
+
+// DeleteChat удаляет чат и все его сообщения
+func (db *Database) DeleteChat(chatID string) error {
+	// Удаляем чат
+	_, err := db.chats.DeleteOne(context.Background(), bson.M{"_id": chatID})
+	if err != nil {
+		return err
+	}
+
+	// Удаляем все сообщения чата
+	_, err = db.messages.DeleteMany(context.Background(), bson.M{"chatId": chatID})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ConvertDBChatToChat конвертирует DBChat в Chat
+func ConvertDBChatToChat(dbChat *DBChat) *Chat {
+	if dbChat == nil {
+		return nil
+	}
+
+	var lastMessage *Message
+	if dbChat.LastMessage != nil {
+		lastMessage = &Message{
+			ID:        dbChat.LastMessage.ID.Hex(),
+			From:      dbChat.LastMessage.From,
+			To:        dbChat.LastMessage.To,
+			Content:   dbChat.LastMessage.Content,
+			CreatedAt: dbChat.LastMessage.CreatedAt,
+			Read:      dbChat.LastMessage.Read,
+			ChatID:    dbChat.LastMessage.ChatID,
+		}
+	}
+
+	return &Chat{
+		ID:          dbChat.ID,
+		Users:       dbChat.Users,
+		LastMessage: lastMessage,
+		CreatedAt:   dbChat.CreatedAt,
+	}
+}
+
+// ConvertDBMessageToMessage конвертирует DBMessage в Message
+func ConvertDBMessageToMessage(dbMsg *DBMessage) *Message {
+	if dbMsg == nil {
+		return nil
+	}
+
+	return &Message{
+		ID:        dbMsg.ID.Hex(),
+		From:      dbMsg.From,
+		To:        dbMsg.To,
+		Content:   dbMsg.Content,
+		CreatedAt: dbMsg.CreatedAt,
+		Read:      dbMsg.Read,
+		ChatID:    dbMsg.ChatID,
+	}
 }
