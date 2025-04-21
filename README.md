@@ -14,7 +14,7 @@
 - Backend: Go (Golang)
 - Frontend: HTML, CSS, JavaScript
 - Протокол: WebSocket
-- Хранение данных: In-memory (в памяти)
+- Хранение данных: MongoDB
 
 ## Запуск
 
