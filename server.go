@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -371,6 +372,11 @@ func handleWebSocket(conn *websocket.Conn) {
 				log.Printf("Ошибка получения истории чата: %v", err)
 				continue
 			}
+
+			// Сортируем сообщения по времени (от старых к новым)
+			sort.Slice(dbMessages, func(i, j int) bool {
+				return dbMessages[i].CreatedAt.Before(dbMessages[j].CreatedAt)
+			})
 
 			// Отправляем историю сообщений
 			for _, dbMsg := range dbMessages {

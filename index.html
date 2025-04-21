@@ -464,31 +464,20 @@
                         }
 
                         if (msg.type === 'chat') {
-                            updateChatList({
-                                ID: msg.content,
-                                Users: [msg.from, msg.to],
-                                LastMessage: msg.content ? { Content: msg.content } : null
-                            });
+                            console.log('Обновление списка чатов:', msg);
+                            updateChatList(msg);
                             return;
                         }
                         
                         if (msg.type === 'message') {
-                            const messagesDiv = document.getElementById('messages');
-                            const messageDiv = document.createElement('div');
-                            messageDiv.className = 'message ' + (msg.from === username ? 'from-me' : 'from-other');
-                            
-                            const senderDiv = document.createElement('div');
-                            senderDiv.className = 'sender';
-                            senderDiv.textContent = msg.from === username ? 'Вы' : msg.from;
-                            
-                            const contentDiv = document.createElement('div');
-                            contentDiv.className = 'content';
-                            contentDiv.textContent = msg.content;
-                            
-                            messageDiv.appendChild(senderDiv);
-                            messageDiv.appendChild(contentDiv);
-                            messagesDiv.appendChild(messageDiv);
-                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            console.log('Получено сообщение для чата:', currentChat, 'ID сообщения:', msg.chatId);
+                            // Отображаем сообщение только если оно относится к текущему чату
+                            if (currentChat && msg.chatId === currentChat) {
+                                console.log('Отображаем сообщение в чате');
+                                addMessage(msg);
+                            } else {
+                                console.log('Сообщение не отображается, так как не соответствует текущему чату');
+                            }
                         }
                     } catch (e) {
                         console.error('Ошибка обработки сообщения:', e);
@@ -639,9 +628,13 @@
 
             ws.send(JSON.stringify(message));
             
+            // Создаем правильный chatId
+            const users = [window.username, newUser].sort();
+            const chatId = btoa(unescape(encodeURIComponent(users.join(':'))));
+            
             // Сразу добавляем чат в список
             updateChatList({
-                ID: `${window.username}_${newUser}`,
+                ID: chatId,
                 Users: [window.username, newUser],
                 LastMessage: { Content: 'Начало чата' }
             });
@@ -650,9 +643,31 @@
         }
 
         function updateChatList(chat) {
+            console.log('Обновление списка чатов:', chat);
             const chatList = document.getElementById('chat-list');
+            
+            // Если это сообщение типа 'chat', извлекаем правильный ID
+            if (chat.type === 'chat') {
+                const users = [chat.from, chat.to].sort();
+                // Используем base64 кодирование как на сервере
+                chat.ID = btoa(unescape(encodeURIComponent(users.join(':'))));
+            }
+            
+            // Проверяем, существует ли уже чат с таким ID
+            const existingChat = chatList.querySelector(`[data-chat-id="${chat.ID}"]`);
+            if (existingChat) {
+                // Обновляем последнее сообщение
+                const lastMessageDiv = existingChat.querySelector('.last-message');
+                if (lastMessageDiv && chat.LastMessage) {
+                    lastMessageDiv.textContent = chat.LastMessage.Content;
+                }
+                return;
+            }
+
             const chatItem = document.createElement('div');
             chatItem.className = 'chat-item';
+            chatItem.setAttribute('data-chat-id', chat.ID);
+            
             if (currentChat === chat.ID) {
                 chatItem.classList.add('active');
             }
@@ -663,14 +678,15 @@
             
             const participants = document.createElement('div');
             participants.className = 'participants';
-            const otherUser = chat.Users.find(user => user !== window.username);
-            participants.textContent = otherUser || chat.Users.join(' ↔ ');
+            const otherUser = chat.Users ? chat.Users.find(user => user !== window.username) : 
+                             (chat.from === window.username ? chat.to : chat.from);
+            participants.textContent = otherUser || (chat.Users ? chat.Users.join(' ↔ ') : '');
             
             const deleteButton = document.createElement('button');
             deleteButton.className = 'delete-chat';
             deleteButton.innerHTML = '×';
             deleteButton.onclick = function(e) {
-                e.stopPropagation(); // Предотвращаем всплытие события
+                e.stopPropagation();
                 if (confirm('Вы уверены, что хотите удалить этот чат?')) {
                     deleteChat(chat.ID);
                 }
@@ -680,37 +696,38 @@
             chatHeader.appendChild(deleteButton);
             chatItem.appendChild(chatHeader);
 
-            if (chat.LastMessage) {
+            if (chat.LastMessage || chat.content) {
                 const lastMessage = document.createElement('div');
                 lastMessage.className = 'last-message';
-                lastMessage.textContent = chat.LastMessage.Content;
+                lastMessage.textContent = chat.LastMessage ? chat.LastMessage.Content : chat.content;
                 chatItem.appendChild(lastMessage);
             }
 
             chatItem.onclick = function() {
+                console.log('Выбран чат:', chat.ID);
+                // Убираем активный класс у всех чатов
                 document.querySelectorAll('.chat-item').forEach(item => {
                     item.classList.remove('active');
                 });
                 chatItem.classList.add('active');
                 
+                // Обновляем текущий чат
                 currentChat = chat.ID;
+                console.log('Текущий чат обновлен:', currentChat);
                 
-                // Очищаем область сообщений перед загрузкой новой истории
-                document.getElementById('messages').innerHTML = '';
+                // Очищаем область сообщений
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML = '';
                 
                 // Запрашиваем историю сообщений
+                console.log('Запрашиваем историю сообщений для чата:', chat.ID);
                 ws.send(JSON.stringify({
                     type: 'get_chat_history',
                     content: chat.ID
                 }));
             };
 
-            // Проверяем, нет ли уже такого чата
-            const existingChat = chatList.querySelector(`[data-chat-id="${chat.ID}"]`);
-            if (!existingChat) {
-                chatItem.setAttribute('data-chat-id', chat.ID);
-                chatList.appendChild(chatItem);
-            }
+            chatList.appendChild(chatItem);
         }
 
         function deleteChat(chatId) {
@@ -762,7 +779,7 @@
                 return;
             }
 
-            // Получаем второй участника чата
+            // Получаем второго участника чата
             const chatItem = document.querySelector(`[data-chat-id="${currentChat}"]`);
             if (!chatItem) {
                 alert('Ошибка: чат не найден');
@@ -785,53 +802,21 @@
             document.getElementById('message').value = '';
         }
 
-        function handleMessage(event) {
-            const msg = JSON.parse(event.data);
-            console.log('Получено сообщение:', msg);
-            
-            switch(msg.type) {
-                case 'chat':
-                    // Обновляем список чатов
-                    updateChatList({
-                        ID: msg.content,
-                        Users: [msg.from, msg.to],
-                        LastMessage: msg.content ? { Content: msg.content } : null
-                    });
-                    break;
-                    
-                case 'message':
-                    // Добавляем сообщение в текущий чат
-                    if (currentChat && currentChat === msg.chatId) {
-                        addMessage(msg);
-                    }
-                    break;
-                    
-                case 'chat_deleted':
-                    // Обработка удаления чата
-                    const chatItem = document.querySelector(`[data-chat-id="${msg.chatId}"]`);
-                    if (chatItem) {
-                        chatItem.remove();
-                    }
-                    if (currentChat === msg.chatId) {
-                        currentChat = null;
-                        document.getElementById('messages').innerHTML = '';
-                    }
-                    break;
-                    
-                case 'error':
-                    alert(msg.content);
-                    break;
-            }
-        }
-
         function addMessage(msg) {
             const messagesArea = document.getElementById('messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${msg.from === window.username ? 'from-me' : 'from-other'}`;
-            messageDiv.innerHTML = `
-                <div class="sender">${msg.from}</div>
-                <div class="content">${msg.content}</div>
-            `;
+            
+            const senderDiv = document.createElement('div');
+            senderDiv.className = 'sender';
+            senderDiv.textContent = msg.from === window.username ? 'Вы' : msg.from;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            contentDiv.textContent = msg.content;
+            
+            messageDiv.appendChild(senderDiv);
+            messageDiv.appendChild(contentDiv);
             messagesArea.appendChild(messageDiv);
             messagesArea.scrollTop = messagesArea.scrollHeight;
         }
