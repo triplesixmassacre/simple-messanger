@@ -105,6 +105,17 @@ func (db *Database) Close() error {
 
 // RegisterUser создает нового пользователя в базе данных
 func (db *Database) RegisterUser(username, password string) error {
+	// Проверяем валидность логина и пароля
+	if err := validateUsername(username); err != nil {
+		log.Printf("Ошибка валидации логина: %v", err)
+		return err
+	}
+
+	if err := validatePassword(password); err != nil {
+		log.Printf("Ошибка валидации пароля: %v", err)
+		return err
+	}
+
 	// Проверяем, существует ли пользователь
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

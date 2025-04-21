@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"regexp"
 	"sync"
 )
 
@@ -29,11 +30,54 @@ func NewAuthManager() *AuthManager {
 	}
 }
 
+// validateUsername проверяет корректность имени пользователя
+func validateUsername(username string) error {
+	// Проверяем длину строки в байтах
+	if len([]rune(username)) > 12 {
+		return errors.New("имя пользователя не должно превышать 12 символов")
+	}
+
+	// Проверяем, что имя пользователя не содержит спецсимволы
+	// Разрешаем любые буквы (включая кириллицу), цифры и подчеркивание
+	invalidChars := regexp.MustCompile(`[!@#$%^&*()+\-=\[\]{};':"\\|,.<>\/?]`)
+	if invalidChars.MatchString(username) {
+		return errors.New("имя пользователя не должно содержать специальные символы")
+	}
+
+	return nil
+}
+
+// validatePassword проверяет корректность пароля
+func validatePassword(password string) error {
+	// Проверяем длину строки в байтах
+	if len([]rune(password)) < 4 || len([]rune(password)) > 16 {
+		return errors.New("пароль должен быть от 4 до 16 символов")
+	}
+
+	// Проверяем, что пароль содержит только допустимые символы
+	validPassword := regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+	if !validPassword.MatchString(password) {
+		return errors.New("пароль может содержать только буквы латиницы и цифры")
+	}
+
+	return nil
+}
+
 // RegisterUser регистрирует нового пользователя
 func (am *AuthManager) RegisterUser(username, password string) error {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
+	// Сначала проверяем валидность логина и пароля
+	if err := validateUsername(username); err != nil {
+		return err
+	}
+
+	if err := validatePassword(password); err != nil {
+		return err
+	}
+
+	// Затем проверяем существование пользователя
 	if _, exists := am.users[username]; exists {
 		return errors.New("пользователь уже существует")
 	}
@@ -50,6 +94,14 @@ func (am *AuthManager) RegisterUser(username, password string) error {
 func (am *AuthManager) Login(username, password string) (string, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
+
+	if err := validateUsername(username); err != nil {
+		return "", err
+	}
+
+	if err := validatePassword(password); err != nil {
+		return "", err
+	}
 
 	user, exists := am.users[username]
 	if !exists {
