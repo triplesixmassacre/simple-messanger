@@ -340,7 +340,7 @@
         let username;
         let authToken;
         let reconnectAttempts = 0;
-        const maxReconnectAttempts = 3;
+        const maxReconnectAttempts = 5;
         let reconnectTimer;
         let currentChat = null;
 
@@ -836,6 +836,21 @@
                 chatId: chat.id
             };
             ws.send(JSON.stringify(message));
+        }
+
+        // Функция для сохранения данных пользователя
+        function saveUserData(data) {
+            localStorage.setItem('chatUserData', JSON.stringify(data));
+        }
+
+        // Функция для загрузки данных пользователя
+        function loadUserData() {
+            const data = localStorage.getItem('chatUserData');
+            return data ? JSON.parse(data) : null;
+        }
+
+        function addRecipient(recipient) {
+            // ... existing code ...
         }
     </script>
 </body>

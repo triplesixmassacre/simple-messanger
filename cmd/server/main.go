@@ -26,15 +26,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
-
+	// Обработка всех остальных запросов (включая статические файлы)
+	http.HandleFunc("/", server.Handler)
 	http.HandleFunc("/ws", server.HandleConnection)
 	http.HandleFunc("/register", server.HandleRegister)
 	http.HandleFunc("/login", server.HandleLogin)
 	http.HandleFunc("/logout", server.HandleLogout)
 	http.HandleFunc("/validate-token", server.HandleValidateToken)
-
-	// Обработка всех остальных запросов (включая статические файлы)
-	http.HandleFunc("/", server.Handler)
 
 	// Создаем сервер
 	srv := &http.Server{

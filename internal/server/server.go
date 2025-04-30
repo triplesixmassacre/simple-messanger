@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -171,9 +172,18 @@ func handleWebSocket(conn *websocket.Conn) {
 			mu.Lock()
 			// Проверяем, не существует ли уже соединение для этого пользователя
 			if existingClient, exists := clients[msg.From]; exists {
+				// Отправляем сообщение о новом входе перед закрытием
+				closeMsg := models.Message{
+					Type:    "info",
+					Content: "Выполнен вход с другого устройства",
+				}
+				closeMsgBytes, _ := json.Marshal(closeMsg)
+				existingClient.Conn.WriteMessage(websocket.TextMessage, closeMsgBytes)
 				// Закрываем существующее соединение
 				existingClient.Conn.Close()
+				delete(clients, msg.From)
 			}
+			// Создаем новое подключение
 			clients[msg.From] = &Client{Conn: conn, Username: msg.From, Token: msg.Content}
 			mu.Unlock()
 
@@ -185,7 +195,7 @@ func handleWebSocket(conn *websocket.Conn) {
 			responseBytes, _ := json.Marshal(response)
 			if err := conn.WriteMessage(websocket.TextMessage, responseBytes); err != nil {
 				log.Printf("Ошибка отправки подтверждения входа: %v", err)
-				continue
+				return
 			}
 
 			// Отправляем непрочитанные сообщения
@@ -491,19 +501,33 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	// Используем FileServer для всех запросов, включая корневой путь
+	// Получаем рабочую директорию
 	workDir, _ := os.Getwd()
-	// Если мы в cmd/server, поднимаемся на два уровня вверх
 	if strings.HasSuffix(workDir, filepath.Join("cmd", "server")) {
 		workDir = filepath.Join(workDir, "..", "..")
 	}
-	// Используем path/filepath для корректной обработки путей на разных ОС
-	staticDir := filepath.Join(workDir, "web", "static")
-	// Проверяем существование директории
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		log.Printf("Директория %s не существует", staticDir)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+	// Нормализуем URL путь (всегда используем прямые слеши)
+	urlPath := path.Clean("/" + r.URL.Path)
+
+	// Устанавливаем правильные MIME-типы
+	if strings.HasSuffix(urlPath, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+	} else if strings.HasSuffix(urlPath, ".css") {
+		w.Header().Set("Content-Type", "text/css")
+	} else if strings.HasSuffix(urlPath, ".html") {
+		w.Header().Set("Content-Type", "text/html")
+	}
+
+	// Если запрос к статическим файлам
+	if strings.HasPrefix(urlPath, "/static/") {
+		// Преобразуем URL путь в путь файловой системы
+		fsPath := filepath.Join(workDir, "web", strings.TrimPrefix(urlPath, "/"))
+		http.ServeFile(w, r, fsPath)
 		return
 	}
-	http.FileServer(http.Dir(staticDir)).ServeHTTP(w, r)
+
+	// Для всех остальных запросов отдаем index.html
+	indexPath := filepath.Join(workDir, "web", "static", "index.html")
+	http.ServeFile(w, r, indexPath)
 }
