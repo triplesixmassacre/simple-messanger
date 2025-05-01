@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"messanger/internal/config"
 	"messanger/internal/database"
 	"messanger/internal/server"
 )
@@ -21,22 +22,32 @@ var (
 )
 
 func main() {
-	var err error
-	db, err = database.NewDatabase("mongodb://localhost:27017")
+	// Загружаем конфигурацию
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Printf("Ошибка загрузки конфигурации: %v, используются значения по умолчанию", err)
+	}
+
+	// Подключаемся к базе данных
+	db, err = database.NewDatabase(cfg.Database.URL)
 	if err != nil {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
-	// Обработка всех остальных запросов (включая статические файлы)
-	http.HandleFunc("/", server.Handler)
+
+	// Инициализируем сервер с конфигурацией
+	server.InitServer(cfg)
+
+	// Настраиваем маршруты
 	http.HandleFunc("/ws", server.HandleConnection)
 	http.HandleFunc("/register", server.HandleRegister)
 	http.HandleFunc("/login", server.HandleLogin)
 	http.HandleFunc("/logout", server.HandleLogout)
 	http.HandleFunc("/validate-token", server.HandleValidateToken)
+	http.HandleFunc("/", server.Handler)
 
 	// Создаем сервер
 	srv := &http.Server{
-		Addr:    ":8000",
+		Addr:    ":" + cfg.Server.Port,
 		Handler: nil,
 	}
 
@@ -46,7 +57,7 @@ func main() {
 
 	// Запускаем сервер в отдельной горутине
 	go func() {
-		log.Println("Сервер запущен на http://localhost:8000")
+		log.Printf("Сервер запущен на http://localhost:%s", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Ошибка запуска сервера: %v", err)
 		}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"messanger/internal/auth"
+	"messanger/internal/config"
 	"messanger/internal/database"
 	"messanger/internal/models"
 
@@ -48,7 +49,9 @@ var (
 	authManager = auth.NewAuthManager()
 	// Подключение к базе данных
 	db *database.Database
-	mu sync.Mutex
+	// Конфигурация
+	cfg *config.Config
+	mu  sync.Mutex
 )
 
 func init() {
@@ -57,6 +60,11 @@ func init() {
 	if err != nil {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
+}
+
+// InitServer инициализирует сервер с заданной конфигурацией
+func InitServer(config *config.Config) {
+	cfg = config
 }
 
 // GenerateToken создает новый токен аутентификации

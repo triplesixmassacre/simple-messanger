@@ -1,0 +1,10 @@
+server:
+  port: "8000"
+  static_dir: "web/static"
+
+database:
+  url: "mongodb://localhost:27017"
+
+websocket:
+  write_timeout: 10s
+  ping_interval: 9s 
