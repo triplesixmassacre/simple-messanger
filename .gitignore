@@ -42,3 +42,5 @@ build/
 # Docker
 .docker/
 docker-compose.override.yml
+
+data/
