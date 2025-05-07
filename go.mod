@@ -1,10 +1,11 @@
 module messanger
 
-go 1.22.5
+go 1.22
 
 require (
 	github.com/gorilla/websocket v1.5.3
 	go.mongodb.org/mongo-driver v1.17.3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -18,5 +19,4 @@ require (
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

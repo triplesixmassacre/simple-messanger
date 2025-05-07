@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongodb:/data/db
+    networks:
+      - messenger-network
+
+  app:
+    build: .
+    container_name: messenger-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongodb
+    environment:
+      - DATABASE_URL=mongodb://mongodb:27017/messenger
+      - SERVER_PORT=8080
+    networks:
+      - messenger-network
+
+networks:
+  messenger-network:
+    driver: bridge 

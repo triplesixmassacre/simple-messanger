@@ -173,10 +173,74 @@ func (db *Database) GetUser(username string) (*DBUser, error) {
 	return &user, nil
 }
 
+// GetChat возвращает информацию о чате по его ID
+func (db *Database) GetChat(chatID string) (*DBChat, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var chat DBChat
+	err := db.chats.FindOne(ctx, bson.M{"_id": chatID}).Decode(&chat)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, fmt.Errorf("чат не найден")
+		}
+		return nil, fmt.Errorf("ошибка получения чата: %v", err)
+	}
+	return &chat, nil
+}
+
+// GetChatMessages получает сообщения из чата
+func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Получаем информацию о чате
+	chat, err := db.GetChat(chatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Получаем сообщения
+	filter := bson.M{"chatId": chatID}
+	opts := options.Find().
+		SetSort(bson.D{{"createdAt", 1}}). // Сортировка от старых к новым
+		SetLimit(limit)
+
+	cursor, err := db.messages.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения сообщений: %v", err)
+	}
+	defer cursor.Close(ctx)
+
+	var messages []DBMessage
+	if err = cursor.All(ctx, &messages); err != nil {
+		return nil, fmt.Errorf("ошибка декодирования сообщений: %v", err)
+	}
+
+	// Проверяем, что все сообщения принадлежат участникам чата
+	validMessages := make([]DBMessage, 0)
+	for _, msg := range messages {
+		if (msg.From == chat.Users[0] && msg.To == chat.Users[1]) ||
+			(msg.From == chat.Users[1] && msg.To == chat.Users[0]) {
+			validMessages = append(validMessages, msg)
+		}
+	}
+
+	return validMessages, nil
+}
+
 // GetOrCreateChat получает существующий чат или создает новый
 func (db *Database) GetOrCreateChat(user1, user2 string) (*DBChat, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Проверяем существование обоих пользователей
+	for _, username := range []string{user1, user2} {
+		_, err := db.GetUser(username)
+		if err != nil {
+			return nil, fmt.Errorf("пользователь %s не найден", username)
+		}
+	}
 
 	// Сортируем имена пользователей для создания уникального ID чата
 	users := []string{user1, user2}
@@ -184,25 +248,25 @@ func (db *Database) GetOrCreateChat(user1, user2 string) (*DBChat, error) {
 	chatID := base64.StdEncoding.EncodeToString([]byte(strings.Join(users, ":")))
 
 	// Пытаемся найти существующий чат
-	var chat DBChat
-	err := db.chats.FindOne(ctx, bson.M{"_id": chatID}).Decode(&chat)
+	chat, err := db.GetChat(chatID)
 	if err == nil {
-		return &chat, nil
+		return chat, nil
 	}
 
 	// Если чат не найден, создаем новый
-	chat = DBChat{
+	newChat := DBChat{
 		ID:        chatID,
 		Users:     users,
 		CreatedAt: time.Now(),
 	}
 
-	_, err = db.chats.InsertOne(ctx, chat)
+	_, err = db.chats.InsertOne(ctx, newChat)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания чата: %v", err)
 	}
 
-	return &chat, nil
+	log.Printf("Создан новый чат между пользователями %s и %s", user1, user2)
+	return &newChat, nil
 }
 
 // SaveMessage сохраняет новое сообщение и обновляет последнее сообщение в чате
@@ -213,7 +277,19 @@ func (db *Database) SaveMessage(from, to, content string) error {
 	// Получаем или создаем чат
 	chat, err := db.GetOrCreateChat(from, to)
 	if err != nil {
-		return err
+		return fmt.Errorf("ошибка получения/создания чата: %v", err)
+	}
+
+	// Проверяем права доступа
+	hasAccess := false
+	for _, user := range chat.Users {
+		if user == from {
+			hasAccess = true
+			break
+		}
+	}
+	if !hasAccess {
+		return fmt.Errorf("нет прав для отправки сообщений в этот чат")
 	}
 
 	// Создаём новое сообщение
@@ -229,7 +305,7 @@ func (db *Database) SaveMessage(from, to, content string) error {
 	// Сохраняем сообщение
 	result, err := db.messages.InsertOne(ctx, message)
 	if err != nil {
-		return err
+		return fmt.Errorf("ошибка сохранения сообщения: %v", err)
 	}
 
 	// Обновляем последнее сообщение в чате
@@ -239,8 +315,12 @@ func (db *Database) SaveMessage(from, to, content string) error {
 		bson.M{"_id": chat.ID},
 		bson.M{"$set": bson.M{"lastMessage": message}},
 	)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления последнего сообщения: %v", err)
+	}
 
-	return err
+	log.Printf("Сообщение успешно сохранено: от %s к %s в чате %s", from, to, chat.ID)
+	return nil
 }
 
 // GetMessages получает сообщения между двумя пользователями
@@ -351,28 +431,6 @@ func (db *Database) GetMessagesWithPagination(from, to string, page, pageSize in
 	return messages, total, nil
 }
 
-// GetChatMessages получает сообщения из чата
-func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	filter := bson.M{"chatId": chatID}
-	opts := options.Find().SetSort(bson.D{{"createdAt", -1}}).SetLimit(limit)
-
-	cursor, err := db.messages.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var messages []DBMessage
-	if err = cursor.All(ctx, &messages); err != nil {
-		return nil, err
-	}
-
-	return messages, nil
-}
-
 // GetUserChats получает все чаты пользователя
 func (db *Database) GetUserChats(username string) ([]DBChat, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -393,16 +451,6 @@ func (db *Database) GetUserChats(username string) ([]DBChat, error) {
 	}
 
 	return chats, nil
-}
-
-// GetChat возвращает информацию о чате по его ID
-func (db *Database) GetChat(chatID string) (*Chat, error) {
-	chat := &Chat{}
-	err := db.chats.FindOne(context.Background(), bson.M{"_id": chatID}).Decode(chat)
-	if err != nil {
-		return nil, err
-	}
-	return chat, nil
 }
 
 // DeleteChat удаляет чат и все его сообщения

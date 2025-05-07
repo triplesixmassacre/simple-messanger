@@ -19,7 +19,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	URL string `yaml:"url" env:"MONGODB_URL"`
+	URL string `yaml:"url" env:"DATABASE_URL"`
 }
 
 type WebSocketConfig struct {
@@ -28,14 +28,13 @@ type WebSocketConfig struct {
 }
 
 func LoadConfig(filename string) (*Config, error) {
-
 	config := &Config{
 		Server: ServerConfig{
-			Port:      "8000",
+			Port:      "8080",
 			StaticDir: "web/static",
 		},
 		Database: DatabaseConfig{
-			URL: "mongodb://localhost:27017",
+			URL: "mongodb://mongodb:27017/messenger",
 		},
 		WebSocket: WebSocketConfig{
 			WriteTimeout: 10 * time.Second,
@@ -59,7 +58,7 @@ func LoadConfig(filename string) (*Config, error) {
 	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
 		config.Server.Port = envPort
 	}
-	if envDB := os.Getenv("MONGODB_URL"); envDB != "" {
+	if envDB := os.Getenv("DATABASE_URL"); envDB != "" {
 		config.Database.URL = envDB
 	}
 	if envStatic := os.Getenv("STATIC_DIR"); envStatic != "" {

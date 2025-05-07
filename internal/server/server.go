@@ -4,12 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +32,7 @@ type Client struct {
 	Conn     *websocket.Conn
 	Username string
 	Token    string
+	writeMu  sync.Mutex // мьютекс для синхронизации записи
 }
 
 var (
@@ -54,17 +55,15 @@ var (
 	mu  sync.Mutex
 )
 
-func init() {
-	var err error
-	db, err = database.NewDatabase("mongodb://localhost:27017")
-	if err != nil {
-		log.Fatalf("Ошибка подключения к базе данных: %v", err)
-	}
-}
-
 // InitServer инициализирует сервер с заданной конфигурацией
 func InitServer(config *config.Config) {
 	cfg = config
+
+	var err error
+	db, err = database.NewDatabase(cfg.Database.URL)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к базе данных: %v", err)
+	}
 }
 
 // GenerateToken создает новый токен аутентификации
@@ -90,6 +89,16 @@ func RegisterUser(username, password string) error {
 // AuthenticateUser проверяет учетные данные пользователя
 func AuthenticateUser(username, password string) (string, error) {
 	return authManager.Login(username, password)
+}
+
+// safeWrite безопасно отправляет сообщение через WebSocket
+func (c *Client) safeWrite(messageType int, data []byte) error {
+	if c == nil || c.Conn == nil {
+		return fmt.Errorf("клиент или соединение не инициализированы")
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(messageType, data)
 }
 
 func handleWebSocket(conn *websocket.Conn) {
@@ -150,14 +159,16 @@ func handleWebSocket(conn *websocket.Conn) {
 				continue
 			}
 
-			// Регистрируем пользователя в базе данных
-			if err := db.RegisterUser(msg.From, msg.Content); err != nil {
+			// Регистрируем пользователя в AuthManager
+			if err := authManager.RegisterUser(msg.From, msg.Content); err != nil {
 				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`))
 				continue
 			}
 
-			// Регистрируем пользователя в AuthManager
-			if err := authManager.RegisterUser(msg.From, msg.Content); err != nil {
+			// Регистрируем пользователя в базе данных
+			if err := db.RegisterUser(msg.From, msg.Content); err != nil {
+				// Если не удалось сохранить в БД, удаляем из AuthManager
+				authManager.Logout(msg.From)
 				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`))
 				continue
 			}
@@ -168,11 +179,14 @@ func handleWebSocket(conn *websocket.Conn) {
 			// Проверяем учетные данные в базе данных
 			user, err := db.GetUser(msg.From)
 			if err != nil {
+				log.Printf("Пользователь не найден: %s", msg.From)
 				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Пользователь не найден"}`))
 				continue
 			}
 
+			// Проверяем пароль
 			if user.Password != msg.Content {
+				log.Printf("Неверный пароль для пользователя: %s", msg.From)
 				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Неверный пароль"}`))
 				continue
 			}
@@ -186,13 +200,19 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Выполнен вход с другого устройства",
 				}
 				closeMsgBytes, _ := json.Marshal(closeMsg)
-				existingClient.Conn.WriteMessage(websocket.TextMessage, closeMsgBytes)
+				existingClient.safeWrite(websocket.TextMessage, closeMsgBytes)
 				// Закрываем существующее соединение
 				existingClient.Conn.Close()
 				delete(clients, msg.From)
 			}
 			// Создаем новое подключение
-			clients[msg.From] = &Client{Conn: conn, Username: msg.From, Token: msg.Content}
+			client := &Client{
+				Conn:     conn,
+				Username: msg.From,
+				Token:    msg.Content,
+				writeMu:  sync.Mutex{},
+			}
+			clients[msg.From] = client
 			mu.Unlock()
 
 			// Отправляем подтверждение успешного входа
@@ -201,10 +221,58 @@ func handleWebSocket(conn *websocket.Conn) {
 				Content: "Успешный вход в систему",
 			}
 			responseBytes, _ := json.Marshal(response)
-			if err := conn.WriteMessage(websocket.TextMessage, responseBytes); err != nil {
-				log.Printf("Ошибка отправки подтверждения входа: %v", err)
-				return
-			}
+			client.safeWrite(websocket.TextMessage, responseBytes)
+
+			log.Printf("Пользователь %s вошел в систему", msg.From)
+
+			// Отправляем список чатов пользователя
+			go func() {
+				chats, err := db.GetUserChats(msg.From)
+				if err != nil {
+					log.Printf("Ошибка получения чатов: %v", err)
+					return
+				}
+
+				// Отправляем только те чаты, где пользователь является одним из двух участников
+				for _, chat := range chats {
+					// Проверяем, что в чате ровно два участника
+					if len(chat.Users) != 2 {
+						continue
+					}
+
+					// Проверяем, что текущий пользователь является одним из участников
+					isParticipant := false
+					var otherUser string
+					for _, user := range chat.Users {
+						if user == msg.From {
+							isParticipant = true
+						} else {
+							otherUser = user
+						}
+					}
+
+					if !isParticipant || otherUser == "" {
+						continue
+					}
+
+					chatMsg := models.Message{
+						Type:    "chat",
+						ChatID:  chat.ID,
+						From:    msg.From,
+						To:      otherUser,
+						Content: chat.ID,
+					}
+					if chat.LastMessage != nil {
+						// Проверяем, что последнее сообщение принадлежит участникам чата
+						if (chat.LastMessage.From == msg.From || chat.LastMessage.From == otherUser) &&
+							(chat.LastMessage.To == msg.From || chat.LastMessage.To == otherUser) {
+							chatMsg.Content = chat.LastMessage.Content
+						}
+					}
+					chatBytes, _ := json.Marshal(chatMsg)
+					client.safeWrite(websocket.TextMessage, chatBytes)
+				}
+			}()
 
 			// Отправляем непрочитанные сообщения
 			go func() {
@@ -220,61 +288,43 @@ func handleWebSocket(conn *websocket.Conn) {
 						From:    msg.From,
 						To:      msg.To,
 						Content: msg.Content,
+						ChatID:  msg.ChatID,
 					})
-					conn.WriteMessage(websocket.TextMessage, messageBytes)
+					client.safeWrite(websocket.TextMessage, messageBytes)
 				}
 			}()
-
-			// Отправляем список чатов пользователя
-			go func() {
-				chats, err := db.GetUserChats(msg.From)
-				if err != nil {
-					log.Printf("Ошибка получения чатов: %v", err)
-					return
-				}
-
-				for _, chat := range chats {
-					chatMsg := models.Message{
-						Type:    "chat",
-						Content: chat.ID,
-						From:    chat.Users[0],
-						To:      chat.Users[1],
-					}
-					if chat.LastMessage != nil {
-						chatMsg.Content = chat.LastMessage.Content
-					}
-					chatBytes, _ := json.Marshal(chatMsg)
-					conn.WriteMessage(websocket.TextMessage, chatBytes)
-
-					// Загружаем историю сообщений для каждого чата
-					messages, err := db.GetChatMessages(chat.ID, 50)
-					if err != nil {
-						log.Printf("Ошибка получения истории чата %s: %v", chat.ID, err)
-						continue
-					}
-
-					// Отправляем историю сообщений
-					for _, msg := range messages {
-						historyMsg := models.Message{
-							Type:    "message",
-							From:    msg.From,
-							To:      msg.To,
-							Content: msg.Content,
-							ChatID:  msg.ChatID,
-						}
-						historyBytes, _ := json.Marshal(historyMsg)
-						conn.WriteMessage(websocket.TextMessage, historyBytes)
-					}
-				}
-			}()
-
-			log.Printf("Пользователь %s вошел в систему", msg.From)
 
 		case "delete_chat":
 			// Получаем информацию о чате
 			chat, err := db.GetChat(msg.ChatID)
 			if err != nil {
 				log.Printf("Ошибка получения информации о чате: %v", err)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "Чат не найден",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				continue
+			}
+
+			// Проверяем, является ли пользователь участником чата
+			isParticipant := false
+			for _, user := range chat.Users {
+				if user == msg.From {
+					isParticipant = true
+					break
+				}
+			}
+
+			if !isParticipant {
+				log.Printf("Попытка удаления чужого чата: %s -> %s", msg.From, msg.ChatID)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "У вас нет прав для удаления этого чата",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
 				continue
 			}
 
@@ -289,26 +339,134 @@ func handleWebSocket(conn *websocket.Conn) {
 			// Отправляем уведомление всем участникам чата
 			for _, user := range chat.Users {
 				if client, exists := clients[user]; exists {
-					client.Conn.WriteMessage(websocket.TextMessage, deleteMsgBytes)
+					client.safeWrite(websocket.TextMessage, deleteMsgBytes)
 				}
 			}
 
 			// Удаляем чат из базы данных
 			if err := db.DeleteChat(msg.ChatID); err != nil {
 				log.Printf("Ошибка удаления чата: %v", err)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "Ошибка при удалении чата",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
 			}
 
 		case "message":
-			// Проверяем существование чата
+			// Проверяем, что отправитель авторизован
+			mu.Lock()
+			currentClient, exists := clients[msg.From]
+			mu.Unlock()
+
+			if !exists || currentClient.Conn != conn {
+				log.Printf("Попытка отправки сообщения от имени другого пользователя: %s", msg.From)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "У вас нет прав для отправки сообщений от имени этого пользователя",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				continue
+			}
+
+			// Проверяем существование получателя
+			_, err := db.GetUser(msg.To)
+			if err != nil {
+				log.Printf("Получатель не найден: %s", msg.To)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "Получатель не найден",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				continue
+			}
+
+			// Проверяем существование чата или создаем новый
 			dbChat, err := db.GetOrCreateChat(msg.From, msg.To)
 			if err != nil {
 				log.Printf("Ошибка получения/создания чата: %v", err)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: fmt.Sprintf("Ошибка создания чата: %v", err),
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
 				continue
 			}
-			chat := database.ConvertDBChatToChat(dbChat)
-			msg.ChatID = chat.ID
 
-			// Проверяем, является ли отправитель участником чата
+			// Устанавливаем правильный ChatID
+			msg.ChatID = dbChat.ID
+
+			// Сохраняем сообщение
+			if err := db.SaveMessage(msg.From, msg.To, msg.Content); err != nil {
+				log.Printf("Ошибка сохранения сообщения: %v", err)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "Ошибка сохранения сообщения",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				continue
+			}
+
+			// Отправляем подтверждение отправителю
+			senderResponse := models.Message{
+				Type:    "message",
+				From:    msg.From,
+				To:      msg.To,
+				Content: msg.Content,
+				ChatID:  dbChat.ID,
+			}
+			senderBytes, _ := json.Marshal(senderResponse)
+			log.Printf("Отправка подтверждения отправителю: %s", string(senderBytes))
+
+			if err := currentClient.safeWrite(websocket.TextMessage, senderBytes); err != nil {
+				log.Printf("Ошибка отправки подтверждения отправителю: %v", err)
+			}
+
+			// Отправляем сообщение получателю, если он онлайн
+			mu.Lock()
+			recipient := clients[msg.To]
+			mu.Unlock()
+
+			if recipient != nil {
+				recipientResponse := models.Message{
+					Type:    "message",
+					From:    msg.From,
+					To:      msg.To,
+					Content: msg.Content,
+					ChatID:  dbChat.ID,
+				}
+				recipientBytes, _ := json.Marshal(recipientResponse)
+				log.Printf("Отправка сообщения получателю: %s", string(recipientBytes))
+				if err := recipient.safeWrite(websocket.TextMessage, recipientBytes); err != nil {
+					log.Printf("Ошибка отправки сообщения получателю: %v", err)
+				}
+			} else {
+				log.Printf("Получатель %s оффлайн, сообщение сохранено", msg.To)
+			}
+
+		case "get_chat_history":
+			// Получаем историю сообщений чата
+			chatID := msg.Content
+
+			// Проверяем, что пользователь имеет доступ к чату
+			chat, err := db.GetChat(chatID)
+			if err != nil {
+				log.Printf("Ошибка получения информации о чате: %v", err)
+				errorMsg := models.Message{
+					Type:    "error",
+					Content: "Чат не найден",
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				continue
+			}
+
+			// Строгая проверка участников чата
 			isParticipant := false
 			for _, user := range chat.Users {
 				if user == msg.From {
@@ -318,92 +476,25 @@ func handleWebSocket(conn *websocket.Conn) {
 			}
 
 			if !isParticipant {
+				log.Printf("Попытка доступа к чужому чату: %s -> %s", msg.From, chatID)
 				errorMsg := models.Message{
 					Type:    "error",
 					Content: "У вас нет доступа к этому чату",
+					ChatID:  chatID,
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				conn.WriteMessage(websocket.TextMessage, errorBytes)
 				continue
 			}
 
-			log.Printf("Получено сообщение: от %s к %s: %s", msg.From, msg.To, msg.Content)
-
-			// Проверка на отправку сообщения самому себе
-			if msg.From == msg.To {
-				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Нельзя отправлять сообщения самому себе",
-				}
-				errorBytes, _ := json.Marshal(errorMsg)
-				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
-					log.Printf("Ошибка отправки сообщения об ошибке: %v", err)
-				}
-				continue
-			}
-
-			// Сохраняем сообщение в базу данных
-			if err := db.SaveMessage(msg.From, msg.To, msg.Content); err != nil {
-				log.Printf("Ошибка сохранения сообщения: %v", err)
-				continue
-			}
-
-			// Отправляем сообщение отправителю для подтверждения
-			senderResponse := models.Message{
-				Type:    "message",
-				From:    msg.From,
-				To:      msg.To,
-				Content: msg.Content,
-				ChatID:  chat.ID,
-			}
-			senderBytes, _ := json.Marshal(senderResponse)
-			log.Printf("Отправка подтверждения отправителю: %s", string(senderBytes))
-			if err := conn.WriteMessage(websocket.TextMessage, senderBytes); err != nil {
-				log.Printf("Ошибка отправки подтверждения отправителю: %v", err)
-			}
-
-			mu.Lock()
-			recipient, exists := clients[msg.To]
-			mu.Unlock()
-
-			if exists {
-				// Если получатель онлайн, отправляем сообщение
-				recipientResponse := models.Message{
-					Type:    "message",
-					From:    msg.From,
-					To:      msg.To,
-					Content: msg.Content,
-					ChatID:  chat.ID,
-				}
-				recipientBytes, _ := json.Marshal(recipientResponse)
-				log.Printf("Отправка сообщения получателю: %s", string(recipientBytes))
-				if err := recipient.Conn.WriteMessage(websocket.TextMessage, recipientBytes); err != nil {
-					log.Printf("Ошибка отправки сообщения получателю: %v", err)
-				} else {
-					// Помечаем сообщение как прочитанное
-					if err := db.MarkMessagesAsRead(msg.From, msg.To); err != nil {
-						log.Printf("Ошибка отметки сообщения как прочитанного: %v", err)
-					}
-				}
-			} else {
-				log.Printf("Получатель %s оффлайн, сообщение сохранено", msg.To)
-			}
-
-		case "get_chat_history":
-			// Получаем историю сообщений чата
-			chatID := msg.Content
-			dbMessages, err := db.GetChatMessages(chatID, 50) // Получаем последние 50 сообщений
+			// Получаем сообщения
+			dbMessages, err := db.GetChatMessages(chatID, 50)
 			if err != nil {
 				log.Printf("Ошибка получения истории чата: %v", err)
 				continue
 			}
 
-			// Сортируем сообщения по времени (от старых к новым)
-			sort.Slice(dbMessages, func(i, j int) bool {
-				return dbMessages[i].CreatedAt.Before(dbMessages[j].CreatedAt)
-			})
-
-			// Отправляем историю сообщений
+			// Отправляем сообщения
 			for _, dbMsg := range dbMessages {
 				message := database.ConvertDBMessageToMessage(&dbMsg)
 				message.Type = "message"
