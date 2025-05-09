@@ -10,9 +10,7 @@ services:
       - messenger-network
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: triplesixmassacre666/darigram:latest
     restart: always
     depends_on:
       - mongodb
