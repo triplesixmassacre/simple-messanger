@@ -203,7 +203,7 @@ func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, er
 	// Получаем сообщения
 	filter := bson.M{"chatId": chatID}
 	opts := options.Find().
-		SetSort(bson.D{{"createdAt", 1}}). // Сортировка от старых к новым
+		SetSort(bson.D{{"createdAt", -1}}). // Сортировка от новых к старым
 		SetLimit(limit)
 
 	cursor, err := db.messages.Find(ctx, filter, opts)
@@ -224,6 +224,11 @@ func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, er
 			(msg.From == chat.Users[1] && msg.To == chat.Users[0]) {
 			validMessages = append(validMessages, msg)
 		}
+	}
+
+	// Переворачиваем массив, чтобы сообщения были от старых к новым
+	for i, j := 0, len(validMessages)-1; i < j; i, j = i+1, j-1 {
+		validMessages[i], validMessages[j] = validMessages[j], validMessages[i]
 	}
 
 	return validMessages, nil

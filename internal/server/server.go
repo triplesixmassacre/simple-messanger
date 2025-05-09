@@ -55,6 +55,15 @@ var (
 	mu  sync.Mutex
 )
 
+// lastPing теперь хранит не только время, но и статус
+
+type PingStatus struct {
+	Last   time.Time
+	Online bool
+}
+
+var lastPing = make(map[string]PingStatus)
+
 // InitServer инициализирует сервер с заданной конфигурацией
 func InitServer(config *config.Config) {
 	cfg = config
@@ -132,6 +141,7 @@ func handleWebSocket(conn *websocket.Conn) {
 	}()
 
 	// Основной цикл обработки сообщений
+	var currentUsername string
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
@@ -147,6 +157,46 @@ func handleWebSocket(conn *websocket.Conn) {
 		if err := json.Unmarshal(message, &msg); err != nil {
 			log.Printf("Ошибка парсинга сообщения: %v", err)
 			continue
+		}
+
+		if msg.Type == "ping" {
+			if msg.From != "" {
+				ps, ok := lastPing[msg.From]
+				log.Printf("PING от %s, lastPing: %+v, clients: %v", msg.From, lastPing, clients)
+				if !ok || !ps.Online {
+					lastPing[msg.From] = PingStatus{Last: time.Now(), Online: true}
+					go func(username string) {
+						chats, err := db.GetUserChats(username)
+						if err != nil {
+							log.Printf("Ошибка получения чатов для online: %v", err)
+							return
+						}
+						for _, chat := range chats {
+							for _, user := range chat.Users {
+								if user != username {
+									if c, exists := clients[user]; exists {
+										log.Printf("Рассылаю ONLINE: %s -> %s", username, user)
+										onlineMsg := models.Message{
+											Type:    "user_status",
+											From:    username,
+											Content: "online",
+										}
+										onlineBytes, _ := json.Marshal(onlineMsg)
+										c.safeWrite(websocket.TextMessage, onlineBytes)
+									}
+								}
+							}
+						}
+					}(msg.From)
+				} else {
+					lastPing[msg.From] = PingStatus{Last: time.Now(), Online: true}
+				}
+			}
+			continue
+		}
+
+		if msg.Type == "login" {
+			currentUsername = msg.From
 		}
 
 		// Обрабатываем разные типы сообщений
@@ -214,6 +264,36 @@ func handleWebSocket(conn *websocket.Conn) {
 			}
 			clients[msg.From] = client
 			mu.Unlock()
+
+			// Сброс статуса в offline, чтобы первый ping после логина вызвал рассылку online
+			lastPing[msg.From] = PingStatus{Last: time.Now(), Online: false}
+
+			go func(currentUser string) {
+				chats, err := db.GetUserChats(currentUser)
+				if err != nil {
+					log.Printf("Ошибка получения чатов для рассылки статуса online при логине: %v", err)
+					return
+				}
+				for _, chat := range chats {
+					for _, user := range chat.Users {
+						if user != currentUser {
+							mu.Lock()
+							recipient, exists := clients[user]
+							mu.Unlock()
+							if exists {
+								log.Printf("Рассылаю ONLINE (логин): %s -> %s", currentUser, user)
+								onlineMsg := models.Message{
+									Type:    "user_status",
+									From:    currentUser,
+									Content: "online",
+								}
+								onlineBytes, _ := json.Marshal(onlineMsg)
+								recipient.safeWrite(websocket.TextMessage, onlineBytes)
+							}
+						}
+					}
+				}
+			}(msg.From)
 
 			// Отправляем подтверждение успешного входа
 			response := models.Message{
@@ -294,6 +374,30 @@ func handleWebSocket(conn *websocket.Conn) {
 				}
 			}()
 
+			// После добавления клиента в clients, отправляем статусы онлайн всех собеседников
+			go func(currentUser string) {
+				chats, err := db.GetUserChats(currentUser)
+				if err != nil {
+					log.Printf("Ошибка получения чатов для статусов онлайн: %v", err)
+					return
+				}
+				for _, chat := range chats {
+					for _, user := range chat.Users {
+						if user != currentUser {
+							if _, exists := clients[user]; exists {
+								onlineMsg := models.Message{
+									Type:    "user_status",
+									From:    user,
+									Content: "online",
+								}
+								onlineBytes, _ := json.Marshal(onlineMsg)
+								client.safeWrite(websocket.TextMessage, onlineBytes)
+							}
+						}
+					}
+				}
+			}(msg.From)
+
 		case "delete_chat":
 			// Получаем информацию о чате
 			chat, err := db.GetChat(msg.ChatID)
@@ -372,9 +476,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			}
 
 			// Проверяем существование получателя
-			_, err := db.GetUser(msg.To)
-			if err != nil {
-				log.Printf("Получатель не найден: %s", msg.To)
+			log.Printf("Проверка получателя: %s", msg.To)
+			if _, err := db.GetUser(msg.To); err != nil {
+				log.Printf("Получатель не найден: %s, ошибка: %v", msg.To, err)
 				errorMsg := models.Message{
 					Type:    "error",
 					Content: "Получатель не найден",
@@ -449,6 +553,28 @@ func handleWebSocket(conn *websocket.Conn) {
 				log.Printf("Получатель %s оффлайн, сообщение сохранено", msg.To)
 			}
 
+			// Обновляем последнее сообщение в чате для обоих пользователей
+			chatMsg := models.Message{
+				Type:    "chat",
+				ChatID:  dbChat.ID,
+				From:    msg.From,
+				To:      msg.To,
+				Content: msg.Content,
+			}
+			chatBytes, _ := json.Marshal(chatMsg)
+
+			// Отправляем обновление чата отправителю
+			if err := currentClient.safeWrite(websocket.TextMessage, chatBytes); err != nil {
+				log.Printf("Ошибка отправки обновления чата отправителю: %v", err)
+			}
+
+			// Отправляем обновление чата получателю, если он онлайн
+			if recipient != nil {
+				if err := recipient.safeWrite(websocket.TextMessage, chatBytes); err != nil {
+					log.Printf("Ошибка отправки обновления чата получателю: %v", err)
+				}
+			}
+
 		case "get_chat_history":
 			// Получаем историю сообщений чата
 			chatID := msg.Content
@@ -512,11 +638,40 @@ func handleWebSocket(conn *websocket.Conn) {
 	for username, client := range clients {
 		if client.Conn == conn {
 			delete(clients, username)
+			// Отправляем уведомление о выходе всем пользователям, с которыми есть чаты
+			go func() {
+				chats, err := db.GetUserChats(username)
+				if err != nil {
+					log.Printf("Ошибка получения чатов для уведомления о выходе: %v", err)
+					return
+				}
+
+				for _, chat := range chats {
+					for _, user := range chat.Users {
+						if user != username {
+							if c, exists := clients[user]; exists {
+								log.Printf("Рассылаю OFFLINE: %s -> %s", username, user)
+								offlineMsg := models.Message{
+									Type:    "user_status",
+									From:    username,
+									Content: "offline",
+								}
+								offlineBytes, _ := json.Marshal(offlineMsg)
+								c.safeWrite(websocket.TextMessage, offlineBytes)
+							}
+						}
+					}
+				}
+			}()
 			break
 		}
 	}
 	mu.Unlock()
 	conn.Close()
+
+	if currentUsername != "" {
+		delete(lastPing, currentUsername)
+	}
 }
 
 func HandleConnection(w http.ResponseWriter, r *http.Request) {
@@ -629,4 +784,46 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// Для всех остальных запросов отдаем index.html
 	indexPath := filepath.Join(workDir, "web", "static", "index.html")
 	http.ServeFile(w, r, indexPath)
+}
+
+// Добавляю отдельную горутину для проверки пингов
+func init() {
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			mu.Lock()
+			for username := range clients {
+				ps, ok := lastPing[username]
+				if !ok || time.Now().Sub(ps.Last) > 20*time.Second {
+					// Считаем пользователя оффлайн
+					delete(clients, username)
+					delete(lastPing, username)
+					go func(username string) {
+						chats, err := db.GetUserChats(username)
+						if err != nil {
+							log.Printf("Ошибка получения чатов для offline: %v", err)
+							return
+						}
+						for _, chat := range chats {
+							for _, user := range chat.Users {
+								if user != username {
+									if c, exists := clients[user]; exists {
+										log.Printf("Рассылаю OFFLINE: %s -> %s", username, user)
+										offlineMsg := models.Message{
+											Type:    "user_status",
+											From:    username,
+											Content: "offline",
+										}
+										offlineBytes, _ := json.Marshal(offlineMsg)
+										c.safeWrite(websocket.TextMessage, offlineBytes)
+									}
+								}
+							}
+						}
+					}(username)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
 }

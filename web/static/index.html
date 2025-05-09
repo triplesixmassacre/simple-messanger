@@ -119,6 +119,22 @@
 
         .chat-item .participants {
             font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .user-status {
+            font-size: 12px;
+            margin-left: 5px;
+        }
+
+        .user-status.online {
+            color: #4CAF50;
+        }
+
+        .user-status.offline {
+            color: #999;
         }
 
         .chat-container {
@@ -280,6 +296,10 @@
 </head>
 <body>
     <div class="container">
+        <div style="background: #45444f; color: #fff; border-radius: 12px; padding: 12px 18px; margin-bottom: 20px;">
+            <div style="font-size: 1.2em; font-weight: bold;">Darigram</div>
+            <div style="font-size: 0.95em; color: #bdbdbd;">193.187.96.47</div>
+        </div>
         <div id="auth-form">
             <div class="auth-tabs">
                 <div class="auth-tab active" onclick="switchAuthTab('login')">Вход</div>
@@ -554,7 +574,14 @@
                 return;
             }
 
-            const otherUser = chatItem.querySelector('.participants').textContent;
+            const participants = chatItem.querySelector('.participants');
+            const otherUser = participants.childNodes[0].textContent.trim();
+            console.log('Отправка сообщения:', {
+                from: username,
+                to: otherUser,
+                content: content,
+                chatId: currentChat
+            });
 
             sendWebSocketMessage({
                 type: 'message',
@@ -592,7 +619,13 @@
             
             const participants = document.createElement('div');
             participants.className = 'participants';
-            participants.textContent = chat.from === username ? chat.to : chat.from;
+            const otherUser = chat.from === username ? chat.to : chat.from;
+            participants.textContent = otherUser;
+            
+            const statusDiv = document.createElement('span');
+            statusDiv.className = 'user-status offline';
+            statusDiv.textContent = '○';
+            participants.appendChild(statusDiv);
             
             const deleteButton = document.createElement('button');
             deleteButton.className = 'delete-chat';
@@ -783,6 +816,21 @@
                 };
                 updateChatList(chatMsg);
             }
+        }
+
+        // Функция обновления статуса пользователя
+        function updateUserStatus(msg) {
+            const chatItems = document.querySelectorAll('.chat-item');
+            chatItems.forEach(chatItem => {
+                const participants = chatItem.querySelector('.participants');
+                if (participants && participants.textContent.includes(msg.from)) {
+                    const statusDiv = participants.querySelector('.user-status');
+                    if (statusDiv) {
+                        statusDiv.textContent = msg.content === 'online' ? '●' : '○';
+                        statusDiv.className = `user-status ${msg.content}`;
+                    }
+                }
+            });
         }
 
         // Инициализация при загрузке страницы
