@@ -22,6 +22,7 @@
 - Протокол: WebSocket
 - Хранение данных: MongoDB
 - Docker и docker-compose для развёртывания
+- CI/CD с GitHub Actions и DockerHub
 
 ## Структура проекта
 
