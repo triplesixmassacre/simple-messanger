@@ -209,13 +209,17 @@ func handleWebSocket(conn *websocket.Conn) {
 			// Проверяем существование пользователя в базе данных
 			_, err := db.GetUser(msg.From)
 			if err == nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Пользователь уже существует"}`))
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Пользователь уже существует"}`)); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
 			// Регистрируем пользователя в AuthManager
 			if err := authManager.RegisterUser(msg.From, msg.Content); err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`))
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`)); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -225,25 +229,33 @@ func handleWebSocket(conn *websocket.Conn) {
 				if err := authManager.Logout(msg.From); err != nil {
 					log.Printf("Ошибка Logout: %v", err)
 				}
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`))
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`)); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
-			conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"success","content":"Регистрация успешна"}`))
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"success","content":"Регистрация успешна"}`)); err != nil {
+				log.Printf("Ошибка WriteMessage: %v", err)
+			}
 
 		case "login":
 			// Проверяем учетные данные в базе данных
 			user, err := db.GetUser(msg.From)
 			if err != nil {
 				log.Printf("Пользователь не найден: %s", msg.From)
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Пользователь не найден"}`))
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Пользователь не найден"}`)); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
 			// Проверяем пароль
 			if user.Password != msg.Content {
 				log.Printf("Неверный пароль для пользователя: %s", msg.From)
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Неверный пароль"}`))
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"Неверный пароль"}`)); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -415,7 +427,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Чат не найден",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -435,7 +449,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "У вас нет прав для удаления этого чата",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -462,7 +478,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Ошибка при удалении чата",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 			}
 
 		case "message":
@@ -478,7 +496,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "У вас нет прав для отправки сообщений от имени этого пользователя",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -491,7 +511,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Получатель не найден",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -504,7 +526,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: fmt.Sprintf("Ошибка создания чата: %v", err),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -519,7 +543,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Ошибка сохранения сообщения",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -595,7 +621,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Чат не найден",
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -616,7 +644,9 @@ func handleWebSocket(conn *websocket.Conn) {
 					ChatID:  chatID,
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
-				conn.WriteMessage(websocket.TextMessage, errorBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
+					log.Printf("Ошибка WriteMessage: %v", err)
+				}
 				continue
 			}
 
@@ -632,7 +662,9 @@ func handleWebSocket(conn *websocket.Conn) {
 				message := database.ConvertDBMessageToMessage(&dbMsg)
 				message.Type = "message"
 				messageBytes, _ := json.Marshal(message)
-				conn.WriteMessage(websocket.TextMessage, messageBytes)
+				if err := conn.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
+					log.Printf("Ошибка WriteMessage (история чата): %v", err)
+				}
 			}
 		}
 
@@ -708,7 +740,9 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"}); err != nil {
+		log.Printf("Ошибка Encode: %v", err)
+	}
 }
 
 // HandleLogin обрабатывает вход пользователя
@@ -742,7 +776,9 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Успешный выход из системы"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"message": "Успешный выход из системы"}); err != nil {
+		log.Printf("Ошибка Encode: %v", err)
+	}
 }
 
 // HandleValidateToken обрабатывает проверку токена
@@ -760,7 +796,9 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"username": username})
+	if err := json.NewEncoder(w).Encode(map[string]string{"username": username}); err != nil {
+		log.Printf("Ошибка Encode: %v", err)
+	}
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
