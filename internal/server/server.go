@@ -107,7 +107,11 @@ func (c *Client) safeWrite(messageType int, data []byte) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.Conn.WriteMessage(messageType, data)
+	if err := c.Conn.WriteMessage(messageType, data); err != nil {
+		log.Printf("Ошибка safeWrite: %v", err)
+		return err
+	}
+	return nil
 }
 
 func handleWebSocket(conn *websocket.Conn) {
@@ -186,7 +190,9 @@ func handleWebSocket(conn *websocket.Conn) {
 											Content: "online",
 										}
 										onlineBytes, _ := json.Marshal(onlineMsg)
-										c.safeWrite(websocket.TextMessage, onlineBytes)
+										if err := c.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
+											log.Printf("Ошибка safeWrite (onlineMsg): %v", err)
+										}
 									}
 								}
 							}
@@ -307,7 +313,9 @@ func handleWebSocket(conn *websocket.Conn) {
 									Content: "online",
 								}
 								onlineBytes, _ := json.Marshal(onlineMsg)
-								recipient.safeWrite(websocket.TextMessage, onlineBytes)
+								if err := recipient.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
+									log.Printf("Ошибка safeWrite (onlineMsg): %v", err)
+								}
 							}
 						}
 					}
@@ -410,7 +418,9 @@ func handleWebSocket(conn *websocket.Conn) {
 									Content: "online",
 								}
 								onlineBytes, _ := json.Marshal(onlineMsg)
-								client.safeWrite(websocket.TextMessage, onlineBytes)
+								if err := client.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
+									log.Printf("Ошибка safeWrite (onlineMsg): %v", err)
+								}
 							}
 						}
 					}
@@ -466,7 +476,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			// Отправляем уведомление всем участникам чата
 			for _, user := range chat.Users {
 				if client, exists := clients[user]; exists {
-					client.safeWrite(websocket.TextMessage, deleteMsgBytes)
+					if err := client.safeWrite(websocket.TextMessage, deleteMsgBytes); err != nil {
+						log.Printf("Ошибка safeWrite (deleteMsg): %v", err)
+					}
 				}
 			}
 
@@ -561,7 +573,7 @@ func handleWebSocket(conn *websocket.Conn) {
 			log.Printf("Отправка подтверждения отправителю: %s", string(senderBytes))
 
 			if err := currentClient.safeWrite(websocket.TextMessage, senderBytes); err != nil {
-				log.Printf("Ошибка отправки подтверждения отправителю: %v", err)
+				log.Printf("Ошибка safeWrite (senderResponse): %v", err)
 			}
 
 			// Отправляем сообщение получателю, если он онлайн
@@ -580,7 +592,7 @@ func handleWebSocket(conn *websocket.Conn) {
 				recipientBytes, _ := json.Marshal(recipientResponse)
 				log.Printf("Отправка сообщения получателю: %s", string(recipientBytes))
 				if err := recipient.safeWrite(websocket.TextMessage, recipientBytes); err != nil {
-					log.Printf("Ошибка отправки сообщения получателю: %v", err)
+					log.Printf("Ошибка safeWrite (recipientResponse): %v", err)
 				}
 			} else {
 				log.Printf("Получатель %s оффлайн, сообщение сохранено", msg.To)
@@ -598,13 +610,13 @@ func handleWebSocket(conn *websocket.Conn) {
 
 			// Отправляем обновление чата отправителю
 			if err := currentClient.safeWrite(websocket.TextMessage, chatBytes); err != nil {
-				log.Printf("Ошибка отправки обновления чата отправителю: %v", err)
+				log.Printf("Ошибка safeWrite (chatBytes): %v", err)
 			}
 
 			// Отправляем обновление чата получателю, если он онлайн
 			if recipient != nil {
 				if err := recipient.safeWrite(websocket.TextMessage, chatBytes); err != nil {
-					log.Printf("Ошибка отправки обновления чата получателю: %v", err)
+					log.Printf("Ошибка safeWrite (recipient chatBytes): %v", err)
 				}
 			}
 
@@ -698,7 +710,9 @@ func handleWebSocket(conn *websocket.Conn) {
 									Content: "offline",
 								}
 								offlineBytes, _ := json.Marshal(offlineMsg)
-								c.safeWrite(websocket.TextMessage, offlineBytes)
+								if err := c.safeWrite(websocket.TextMessage, offlineBytes); err != nil {
+									log.Printf("Ошибка safeWrite (offlineMsg): %v", err)
+								}
 							}
 						}
 					}
@@ -862,7 +876,9 @@ func init() {
 											Content: "offline",
 										}
 										offlineBytes, _ := json.Marshal(offlineMsg)
-										c.safeWrite(websocket.TextMessage, offlineBytes)
+										if err := c.safeWrite(websocket.TextMessage, offlineBytes); err != nil {
+											log.Printf("Ошибка safeWrite (offlineMsg): %v", err)
+										}
 									}
 								}
 							}
