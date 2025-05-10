@@ -112,11 +112,15 @@ func (c *Client) safeWrite(messageType int, data []byte) error {
 
 func handleWebSocket(conn *websocket.Conn) {
 	// Устанавливаем таймаут для чтения
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		log.Printf("SetReadDeadline error: %v", err)
+	}
 
 	// Устанавливаем обработчик пингов
 	conn.SetPingHandler(func(appData string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			log.Printf("SetReadDeadline error (ping handler): %v", err)
+		}
 		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
 	})
 
@@ -218,7 +222,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			// Регистрируем пользователя в базе данных
 			if err := db.RegisterUser(msg.From, msg.Content); err != nil {
 				// Если не удалось сохранить в БД, удаляем из AuthManager
-				authManager.Logout(msg.From)
+				if err := authManager.Logout(msg.From); err != nil {
+					log.Printf("Ошибка Logout: %v", err)
+				}
 				conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"`+err.Error()+`"}`))
 				continue
 			}
@@ -250,9 +256,10 @@ func handleWebSocket(conn *websocket.Conn) {
 					Content: "Выполнен вход с другого устройства",
 				}
 				closeMsgBytes, _ := json.Marshal(closeMsg)
-				existingClient.safeWrite(websocket.TextMessage, closeMsgBytes)
+				if err := existingClient.safeWrite(websocket.TextMessage, closeMsgBytes); err != nil {
+					log.Printf("Ошибка safeWrite (closeMsg): %v", err)
+				}
 				// Закрываем существующее соединение
-				existingClient.Conn.Close()
 				delete(clients, msg.From)
 			}
 			// Создаем новое подключение
@@ -630,7 +637,9 @@ func handleWebSocket(conn *websocket.Conn) {
 		}
 
 		// Обновляем таймаут после каждого успешного чтения
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			log.Printf("SetReadDeadline error (loop): %v", err)
+		}
 	}
 
 	// Очищаем соединение при выходе
@@ -794,7 +803,7 @@ func init() {
 			mu.Lock()
 			for username := range clients {
 				ps, ok := lastPing[username]
-				if !ok || time.Now().Sub(ps.Last) > 20*time.Second {
+				if !ok || time.Since(ps.Last) > 20*time.Second {
 					// Считаем пользователя оффлайн
 					delete(clients, username)
 					delete(lastPing, username)
