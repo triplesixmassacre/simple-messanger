@@ -203,7 +203,7 @@ func (db *Database) GetChatMessages(chatID string, limit int64) ([]DBMessage, er
 	// Получаем сообщения
 	filter := bson.M{"chatId": chatID}
 	opts := options.Find().
-		SetSort(bson.D{{"createdAt", -1}}). // Сортировка от новых к старым
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}). // Сортировка от новых к старым
 		SetLimit(limit)
 
 	cursor, err := db.messages.Find(ctx, filter, opts)
@@ -340,7 +340,7 @@ func (db *Database) GetMessages(from, to string, limit int64) ([]DBMessage, erro
 		},
 	}
 
-	opts := options.Find().SetSort(bson.D{{"createdAt", -1}}).SetLimit(limit)
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(limit)
 	cursor, err := db.messages.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
@@ -418,7 +418,7 @@ func (db *Database) GetMessagesWithPagination(from, to string, page, pageSize in
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{"createdAt", -1}}).
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
 		SetSkip((page - 1) * pageSize).
 		SetLimit(pageSize)
 
@@ -442,7 +442,7 @@ func (db *Database) GetUserChats(username string) ([]DBChat, error) {
 	defer cancel()
 
 	filter := bson.M{"users": username}
-	opts := options.Find().SetSort(bson.D{{"lastMessage.createdAt", -1}})
+	opts := options.Find().SetSort(bson.D{{Key: "lastMessage.createdAt", Value: -1}})
 
 	cursor, err := db.chats.Find(ctx, filter, opts)
 	if err != nil {
