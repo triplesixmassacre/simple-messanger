@@ -520,6 +520,9 @@ func handleWebSocket(conn *websocket.Conn) {
 				continue
 			}
 
+			// Устанавливаем время создания сообщения
+			msg.CreatedAt = time.Now()
+
 			// Проверяем существование получателя
 			log.Printf("Проверка получателя: %s", msg.To)
 			if _, err := db.GetUser(msg.To); err != nil {

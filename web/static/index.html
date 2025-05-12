@@ -368,6 +368,27 @@
         var isInitialized = false;
         var isAuthenticated = false;
 
+        // Восстанавливаем пользователя из localStorage
+        function restoreUser() {
+            try {
+                const data = localStorage.getItem('chatUserData');
+                if (data) {
+                    const user = JSON.parse(data);
+                    if (user.username && user.password) {
+                        username = user.username;
+                        return user;
+                    }
+                }
+            } catch (e) {}
+            return null;
+        }
+        function saveUser(username, password) {
+            localStorage.setItem('chatUserData', JSON.stringify({username, password}));
+        }
+        function clearUser() {
+            localStorage.removeItem('chatUserData');
+        }
+
         // Функция инициализации WebSocket
         function initWebSocket() {
             if (isInitialized) {
@@ -385,6 +406,17 @@
                     document.getElementById('status').className = 'connected';
                     reconnectAttempts = 0;
                     isWebSocketReady = true;
+
+                    // Восстанавливаем сессию, если есть данные
+                    const user = restoreUser();
+                    if (user && !isAuthenticated) {
+                        sendWebSocketMessage({
+                            type: 'login',
+                            from: user.username,
+                            to: '',
+                            content: user.password
+                        });
+                    }
 
                     // Отправляем все сообщения из очереди
                     while (messageQueue.length > 0) {
@@ -404,8 +436,7 @@
                     document.getElementById('status').className = 'connecting';
                     isWebSocketReady = false;
                     isInitialized = false;
-                    isAuthenticated = false;
-
+                    // isAuthenticated НЕ сбрасываем!
                     if (reconnectAttempts < maxReconnectAttempts) {
                         reconnectAttempts++;
                         setTimeout(initWebSocket, reconnectInterval * reconnectAttempts);
@@ -419,7 +450,7 @@
                     console.error('WebSocket ошибка:', error);
                     isWebSocketReady = false;
                     isInitialized = false;
-                    isAuthenticated = false;
+                    // isAuthenticated НЕ сбрасываем!
                 };
 
                 ws.onmessage = function(event) {
@@ -436,14 +467,17 @@
                             if (msg.content === 'Регистрация успешна') {
                                 // Автоматически входим после успешной регистрации
                                 username = document.getElementById('register-username').value.trim();
+                                const password = document.getElementById('register-password').value;
+                                saveUser(username, password);
                                 sendWebSocketMessage({
                                     type: 'login',
                                     from: username,
                                     to: '',
-                                    content: document.getElementById('register-password').value
+                                    content: password
                                 });
                             } else if (msg.content === 'Успешный вход в систему') {
                                 isAuthenticated = true;
+                                saveUser(username, document.getElementById('login-password').value || restoreUser().password);
                                 document.getElementById('auth-form').style.display = 'none';
                                 document.getElementById('chat-container').style.display = 'block';
                                 requestChatList();
@@ -769,6 +803,7 @@
             }
             username = null;
             currentChat = null;
+            clearUser();
             document.getElementById('chat-container').style.display = 'none';
             document.getElementById('auth-form').style.display = 'block';
             document.getElementById('messages').innerHTML = '';
