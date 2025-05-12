@@ -510,8 +510,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if !exists || currentClient.Conn != conn {
 				log.Printf("Попытка отправки сообщения от имени другого пользователя: %s", msg.From)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "У вас нет прав для отправки сообщений от имени этого пользователя",
+					Type:      "error",
+					Content:   "У вас нет прав для отправки сообщений от имени этого пользователя",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -528,8 +529,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if _, err := db.GetUser(msg.To); err != nil {
 				log.Printf("Получатель не найден: %s, ошибка: %v", msg.To, err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Получатель не найден",
+					Type:      "error",
+					Content:   "Получатель не найден",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -543,8 +545,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if err != nil {
 				log.Printf("Ошибка получения/создания чата: %v", err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: fmt.Sprintf("Ошибка создания чата: %v", err),
+					Type:      "error",
+					Content:   fmt.Sprintf("Ошибка создания чата: %v", err),
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -560,8 +563,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if err := db.SaveMessage(msg.From, msg.To, msg.Content); err != nil {
 				log.Printf("Ошибка сохранения сообщения: %v", err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Ошибка сохранения сообщения",
+					Type:      "error",
+					Content:   "Ошибка сохранения сообщения",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -571,14 +575,8 @@ func handleWebSocket(conn *websocket.Conn) {
 			}
 
 			// Отправляем подтверждение отправителю
-			senderResponse := models.Message{
-				Type:    "message",
-				From:    msg.From,
-				To:      msg.To,
-				Content: msg.Content,
-				ChatID:  dbChat.ID,
-			}
-			senderBytes, _ := json.Marshal(senderResponse)
+			msg.Type = "message"
+			senderBytes, _ := json.Marshal(msg)
 			log.Printf("Отправка подтверждения отправителю: %s", string(senderBytes))
 
 			if err := currentClient.safeWrite(websocket.TextMessage, senderBytes); err != nil {
@@ -591,14 +589,7 @@ func handleWebSocket(conn *websocket.Conn) {
 			mu.Unlock()
 
 			if recipient != nil {
-				recipientResponse := models.Message{
-					Type:    "message",
-					From:    msg.From,
-					To:      msg.To,
-					Content: msg.Content,
-					ChatID:  dbChat.ID,
-				}
-				recipientBytes, _ := json.Marshal(recipientResponse)
+				recipientBytes, _ := json.Marshal(msg)
 				log.Printf("Отправка сообщения получателю: %s", string(recipientBytes))
 				if err := recipient.safeWrite(websocket.TextMessage, recipientBytes); err != nil {
 					log.Printf("Ошибка safeWrite (recipientResponse): %v", err)
@@ -609,11 +600,12 @@ func handleWebSocket(conn *websocket.Conn) {
 
 			// Обновляем последнее сообщение в чате для обоих пользователей
 			chatMsg := models.Message{
-				Type:    "chat",
-				ChatID:  dbChat.ID,
-				From:    msg.From,
-				To:      msg.To,
-				Content: msg.Content,
+				Type:      "chat",
+				ChatID:    dbChat.ID,
+				From:      msg.From,
+				To:        msg.To,
+				Content:   msg.Content,
+				CreatedAt: msg.CreatedAt,
 			}
 			chatBytes, _ := json.Marshal(chatMsg)
 

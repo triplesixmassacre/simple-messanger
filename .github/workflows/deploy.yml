@@ -1,19 +1,15 @@
 name: Deploy
 
 on:
-  workflow_run:
-    workflows: ["Build"]
+  push:
     branches: [main, dev]
-    types:
-      - completed
 
 jobs:
-  deploy-prod:
-    name: Deploy to production
+  deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     steps:
       - name: Deploy to server
+        if: github.ref == 'refs/heads/main'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -28,12 +24,8 @@ jobs:
           timeout: 30s
           command_timeout: 10m
 
-  deploy-test:
-    name: Deploy to test
-    runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
-    steps:
       - name: Deploy to test server
+        if: github.ref == 'refs/heads/dev'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
