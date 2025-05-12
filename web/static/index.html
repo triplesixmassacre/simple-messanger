@@ -359,7 +359,7 @@
         var ws = null;
         var username = null;
         var currentChat = null;
-        var wsUrl = 'ws://193.187.96.47:8080/ws';
+        var wsUrl = 'ws://' + window.location.hostname + '/ws';
         var reconnectAttempts = 0;
         var maxReconnectAttempts = 5;
         var reconnectInterval = 1000;
