@@ -185,9 +185,10 @@ func handleWebSocket(conn *websocket.Conn) {
 									if c, exists := clients[user]; exists {
 										log.Printf("Рассылаю ONLINE: %s -> %s", username, user)
 										onlineMsg := models.Message{
-											Type:    "user_status",
-											From:    username,
-											Content: "online",
+											Type:      "user_status",
+											From:      username,
+											Content:   "online",
+											CreatedAt: time.Now(),
 										}
 										onlineBytes, _ := json.Marshal(onlineMsg)
 										if err := c.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
@@ -270,8 +271,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if existingClient, exists := clients[msg.From]; exists {
 				// Отправляем сообщение о новом входе перед закрытием
 				closeMsg := models.Message{
-					Type:    "info",
-					Content: "Выполнен вход с другого устройства",
+					Type:      "info",
+					Content:   "Выполнен вход с другого устройства",
+					CreatedAt: time.Now(),
 				}
 				closeMsgBytes, _ := json.Marshal(closeMsg)
 				if err := existingClient.safeWrite(websocket.TextMessage, closeMsgBytes); err != nil {
@@ -281,13 +283,12 @@ func handleWebSocket(conn *websocket.Conn) {
 				delete(clients, msg.From)
 			}
 			// Создаем новое подключение
-			client := &Client{
+			clients[msg.From] = &Client{
 				Conn:     conn,
 				Username: msg.From,
 				Token:    msg.Content,
 				writeMu:  sync.Mutex{},
 			}
-			clients[msg.From] = client
 			mu.Unlock()
 
 			// Сброс статуса в offline, чтобы первый ping после логина вызвал рассылку online
@@ -308,9 +309,10 @@ func handleWebSocket(conn *websocket.Conn) {
 							if exists {
 								log.Printf("Рассылаю ONLINE (логин): %s -> %s", currentUser, user)
 								onlineMsg := models.Message{
-									Type:    "user_status",
-									From:    currentUser,
-									Content: "online",
+									Type:      "user_status",
+									From:      currentUser,
+									Content:   "online",
+									CreatedAt: time.Now(),
 								}
 								onlineBytes, _ := json.Marshal(onlineMsg)
 								if err := recipient.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
@@ -324,11 +326,12 @@ func handleWebSocket(conn *websocket.Conn) {
 
 			// Отправляем подтверждение успешного входа
 			response := models.Message{
-				Type:    "success",
-				Content: "Успешный вход в систему",
+				Type:      "success",
+				Content:   "Успешный вход в систему",
+				CreatedAt: time.Now(),
 			}
 			responseBytes, _ := json.Marshal(response)
-			if err := client.safeWrite(websocket.TextMessage, responseBytes); err != nil {
+			if err := clients[msg.From].safeWrite(websocket.TextMessage, responseBytes); err != nil {
 				log.Printf("Ошибка safeWrite (responseBytes): %v", err)
 			}
 
@@ -365,11 +368,12 @@ func handleWebSocket(conn *websocket.Conn) {
 					}
 
 					chatMsg := models.Message{
-						Type:    "chat",
-						ChatID:  chat.ID,
-						From:    msg.From,
-						To:      otherUser,
-						Content: chat.ID,
+						Type:      "chat",
+						ChatID:    chat.ID,
+						From:      msg.From,
+						To:        otherUser,
+						Content:   chat.ID,
+						CreatedAt: time.Now(),
 					}
 					if chat.LastMessage != nil {
 						// Проверяем, что последнее сообщение принадлежит участникам чата
@@ -379,7 +383,7 @@ func handleWebSocket(conn *websocket.Conn) {
 						}
 					}
 					chatBytes, _ := json.Marshal(chatMsg)
-					if err := client.safeWrite(websocket.TextMessage, chatBytes); err != nil {
+					if err := clients[msg.From].safeWrite(websocket.TextMessage, chatBytes); err != nil {
 						log.Printf("Ошибка safeWrite (chatBytes): %v", err)
 					}
 				}
@@ -395,13 +399,14 @@ func handleWebSocket(conn *websocket.Conn) {
 
 				for _, msg := range messages {
 					messageBytes, _ := json.Marshal(models.Message{
-						Type:    "message",
-						From:    msg.From,
-						To:      msg.To,
-						Content: msg.Content,
-						ChatID:  msg.ChatID,
+						Type:      "message",
+						From:      msg.From,
+						To:        msg.To,
+						Content:   msg.Content,
+						ChatID:    msg.ChatID,
+						CreatedAt: time.Now(),
 					})
-					if err := client.safeWrite(websocket.TextMessage, messageBytes); err != nil {
+					if err := clients[msg.From].safeWrite(websocket.TextMessage, messageBytes); err != nil {
 						log.Printf("Ошибка safeWrite (messageBytes): %v", err)
 					}
 				}
@@ -419,12 +424,13 @@ func handleWebSocket(conn *websocket.Conn) {
 						if user != currentUser {
 							if _, exists := clients[user]; exists {
 								onlineMsg := models.Message{
-									Type:    "user_status",
-									From:    user,
-									Content: "online",
+									Type:      "user_status",
+									From:      user,
+									Content:   "online",
+									CreatedAt: time.Now(),
 								}
 								onlineBytes, _ := json.Marshal(onlineMsg)
-								if err := client.safeWrite(websocket.TextMessage, onlineBytes); err != nil {
+								if err := clients[currentUser].safeWrite(websocket.TextMessage, onlineBytes); err != nil {
 									log.Printf("Ошибка safeWrite (onlineMsg): %v", err)
 								}
 							}
@@ -439,8 +445,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if err != nil {
 				log.Printf("Ошибка получения информации о чате: %v", err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Чат не найден",
+					Type:      "error",
+					Content:   "Чат не найден",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -461,8 +468,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if !isParticipant {
 				log.Printf("Попытка удаления чужого чата: %s -> %s", msg.From, msg.ChatID)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "У вас нет прав для удаления этого чата",
+					Type:      "error",
+					Content:   "У вас нет прав для удаления этого чата",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -473,9 +481,10 @@ func handleWebSocket(conn *websocket.Conn) {
 
 			// Отправляем уведомление об удалении чата всем участникам
 			deleteMsg := models.Message{
-				Type:   "chat_deleted",
-				ChatID: msg.ChatID,
-				From:   msg.From,
+				Type:      "chat_deleted",
+				ChatID:    msg.ChatID,
+				From:      msg.From,
+				CreatedAt: time.Now(),
 			}
 			deleteMsgBytes, _ := json.Marshal(deleteMsg)
 
@@ -492,8 +501,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if err := db.DeleteChat(msg.ChatID); err != nil {
 				log.Printf("Ошибка удаления чата: %v", err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Ошибка при удалении чата",
+					Type:      "error",
+					Content:   "Ошибка при удалении чата",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -630,8 +640,9 @@ func handleWebSocket(conn *websocket.Conn) {
 			if err != nil {
 				log.Printf("Ошибка получения информации о чате: %v", err)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "Чат не найден",
+					Type:      "error",
+					Content:   "Чат не найден",
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -652,9 +663,10 @@ func handleWebSocket(conn *websocket.Conn) {
 			if !isParticipant {
 				log.Printf("Попытка доступа к чужому чату: %s -> %s", msg.From, chatID)
 				errorMsg := models.Message{
-					Type:    "error",
-					Content: "У вас нет доступа к этому чату",
-					ChatID:  chatID,
+					Type:      "error",
+					Content:   "У вас нет доступа к этому чату",
+					ChatID:    chatID,
+					CreatedAt: time.Now(),
 				}
 				errorBytes, _ := json.Marshal(errorMsg)
 				if err := conn.WriteMessage(websocket.TextMessage, errorBytes); err != nil {
@@ -674,6 +686,7 @@ func handleWebSocket(conn *websocket.Conn) {
 			for _, dbMsg := range dbMessages {
 				message := database.ConvertDBMessageToMessage(&dbMsg)
 				message.Type = "message"
+				message.CreatedAt = time.Now()
 				messageBytes, _ := json.Marshal(message)
 				if err := conn.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
 					log.Printf("Ошибка WriteMessage (история чата): %v", err)
@@ -709,9 +722,10 @@ func handleWebSocket(conn *websocket.Conn) {
 							if c, exists := clients[user]; exists {
 								log.Printf("Рассылаю OFFLINE: %s -> %s", username, user)
 								offlineMsg := models.Message{
-									Type:    "user_status",
-									From:    username,
-									Content: "offline",
+									Type:      "user_status",
+									From:      username,
+									Content:   "offline",
+									CreatedAt: time.Now(),
 								}
 								offlineBytes, _ := json.Marshal(offlineMsg)
 								if err := c.safeWrite(websocket.TextMessage, offlineBytes); err != nil {
@@ -877,9 +891,10 @@ func init() {
 									if c, exists := clients[user]; exists {
 										log.Printf("Рассылаю OFFLINE: %s -> %s", username, user)
 										offlineMsg := models.Message{
-											Type:    "user_status",
-											From:    username,
-											Content: "offline",
+											Type:      "user_status",
+											From:      username,
+											Content:   "offline",
+											CreatedAt: time.Now(),
 										}
 										offlineBytes, _ := json.Marshal(offlineMsg)
 										if err := c.safeWrite(websocket.TextMessage, offlineBytes); err != nil {

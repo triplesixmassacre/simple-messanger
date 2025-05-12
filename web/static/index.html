@@ -408,15 +408,13 @@
                     reconnectAttempts = 0;
                     isWebSocketReady = true;
 
-                    // Восстанавливаем сессию, если есть данные
-                    const user = restoreUser();
-                    if (user && !isAuthenticated) {
-                        sendWebSocketMessage({
-                            type: 'login',
-                            from: user.username,
-                            to: '',
-                            content: user.password
-                        });
+                    // Восстанавливаем пользователя из localStorage
+                    const data = localStorage.getItem('chatUserData');
+                    if (data) {
+                        const user = JSON.parse(data);
+                        if (user.username && user.password) {
+                            ws.send(JSON.stringify({ type: 'login', from: user.username, content: user.password }));
+                        }
                     }
 
                     // Отправляем все сообщения из очереди
@@ -471,6 +469,7 @@
                         }
 
                         if (msg.type === 'success') {
+                            isAuthenticated = true;
                             if (msg.content === 'Регистрация успешна') {
                                 // Автоматически входим после успешной регистрации
                                 username = document.getElementById('register-username').value.trim();
