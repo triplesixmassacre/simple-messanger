@@ -328,7 +328,9 @@ func handleWebSocket(conn *websocket.Conn) {
 				Content: "Успешный вход в систему",
 			}
 			responseBytes, _ := json.Marshal(response)
-			client.safeWrite(websocket.TextMessage, responseBytes)
+			if err := client.safeWrite(websocket.TextMessage, responseBytes); err != nil {
+				log.Printf("Ошибка safeWrite (responseBytes): %v", err)
+			}
 
 			log.Printf("Пользователь %s вошел в систему", msg.From)
 
@@ -377,7 +379,9 @@ func handleWebSocket(conn *websocket.Conn) {
 						}
 					}
 					chatBytes, _ := json.Marshal(chatMsg)
-					client.safeWrite(websocket.TextMessage, chatBytes)
+					if err := client.safeWrite(websocket.TextMessage, chatBytes); err != nil {
+						log.Printf("Ошибка safeWrite (chatBytes): %v", err)
+					}
 				}
 			}()
 
@@ -397,7 +401,9 @@ func handleWebSocket(conn *websocket.Conn) {
 						Content: msg.Content,
 						ChatID:  msg.ChatID,
 					})
-					client.safeWrite(websocket.TextMessage, messageBytes)
+					if err := client.safeWrite(websocket.TextMessage, messageBytes); err != nil {
+						log.Printf("Ошибка safeWrite (messageBytes): %v", err)
+					}
 				}
 			}()
 
