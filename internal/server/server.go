@@ -700,6 +700,9 @@ func handleWebSocket(conn *websocket.Conn) {
 	for username, client := range clients {
 		if client.Conn == conn {
 			delete(clients, username)
+			if client.Conn != nil {
+				client.Conn.Close()
+			}
 			// Отправляем уведомление о выходе всем пользователям, с которыми есть чаты
 			go func() {
 				chats, err := db.GetUserChats(username)

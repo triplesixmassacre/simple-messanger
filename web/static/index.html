@@ -367,6 +367,7 @@
         var messageQueue = [];
         var isInitialized = false;
         var isAuthenticated = false;
+        var pingIntervalId = null;
 
         // Восстанавливаем пользователя из localStorage
         function restoreUser() {
@@ -428,6 +429,8 @@
                     if (isAuthenticated) {
                         requestChatList();
                     }
+
+                    startPing();
                 };
 
                 ws.onclose = function() {
@@ -444,6 +447,8 @@
                         document.getElementById('status').textContent = 'Не удалось подключиться';
                         document.getElementById('status').className = 'disconnected';
                     }
+
+                    stopPing();
                 };
 
                 ws.onerror = function(error) {
@@ -451,6 +456,8 @@
                     isWebSocketReady = false;
                     isInitialized = false;
                     // isAuthenticated НЕ сбрасываем!
+
+                    stopPing();
                 };
 
                 ws.onmessage = function(event) {
@@ -496,6 +503,11 @@
                             } else {
                                 updateLastMessage(msg);
                             }
+                        }
+
+                        if (msg.type === 'user_status') {
+                            updateUserStatus(msg);
+                            return;
                         }
                     } catch (error) {
                         console.error('Ошибка обработки сообщения:', error);
@@ -866,6 +878,19 @@
                     }
                 }
             });
+        }
+
+        function startPing() {
+            if (pingIntervalId) clearInterval(pingIntervalId);
+            pingIntervalId = setInterval(function() {
+                if (isWebSocketReady && isAuthenticated && username) {
+                    sendWebSocketMessage({ type: 'ping', from: username });
+                }
+            }, 5000);
+        }
+        function stopPing() {
+            if (pingIntervalId) clearInterval(pingIntervalId);
+            pingIntervalId = null;
         }
 
         // Инициализация при загрузке страницы
